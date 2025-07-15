@@ -49,8 +49,8 @@ A production-ready, scalable authentication API built with **FastAPI** and **Pos
 
 ```sql
 -- Core user management
-users (id, username, email, password_hash, first_name, last_name,
-       gender, selected_size, avatar_url, is_profile_complete,
+users (id, username, email, password_hash,
+       gender, selected_size, avatar_url,
        is_verified, created_at, updated_at)
 
 -- OAuth integration

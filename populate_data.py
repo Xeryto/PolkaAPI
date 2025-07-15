@@ -2,7 +2,7 @@
 """
 Script to populate the database with sample brands and styles data
 """
-from database import get_db, init_db
+from database import SessionLocal, init_db
 from models import Brand, Style
 from sqlalchemy.orm import Session
 
@@ -78,7 +78,7 @@ def main():
     init_db()
     
     # Get database session
-    db = next(get_db())
+    db = SessionLocal()
     
     try:
         # Populate brands

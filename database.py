@@ -3,15 +3,14 @@ Database connection and session management
 """
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import StaticPool
 from config import settings
 from models import Base
 
 # Create database engine
 engine = create_engine(
     settings.DATABASE_URL,
-    poolclass=StaticPool,
     pool_pre_ping=True,
+    pool_recycle=3600,
     echo=settings.DEBUG
 )
 

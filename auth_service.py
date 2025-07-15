@@ -53,8 +53,6 @@ class AuthService:
         username: str,
         email: str,
         password_hash: Optional[str] = None,
-        first_name: Optional[str] = None,
-        last_name: Optional[str] = None,
         avatar_url: Optional[str] = None,
         is_verified: bool = False
     ) -> User:
@@ -64,11 +62,8 @@ class AuthService:
             username=username,
             email=email,
             password_hash=password_hash,
-            first_name=first_name,
-            last_name=last_name,
             avatar_url=avatar_url,
-            is_verified=is_verified,
-            is_profile_complete=bool(first_name and last_name)
+            is_verified=is_verified
         )
         db.add(user)
         db.commit()
@@ -187,8 +182,6 @@ class AuthService:
                     db=db,
                     username=username,
                     email=user_info['email'],
-                    first_name=user_info['first_name'],
-                    last_name=user_info['last_name'],
                     avatar_url=user_info['avatar_url'],
                     is_verified=user_info['is_verified']
                 )
@@ -210,10 +203,7 @@ class AuthService:
                 "id": user.id,
                 "username": user.username,
                 "email": user.email,
-                "first_name": user.first_name,
-                "last_name": user.last_name,
                 "avatar_url": user.avatar_url,
-                "is_profile_complete": user.is_profile_complete,
                 "is_verified": user.is_verified,
                 "created_at": user.created_at,
                 "updated_at": user.updated_at
@@ -223,7 +213,7 @@ class AuthService:
     @staticmethod
     def _generate_unique_username(db: Session, user_info: Dict[str, Any]) -> str:
         """Generate a unique username from user info"""
-        base_username = user_info.get('first_name', '').lower() or user_info.get('email', '').split('@')[0]
+        base_username = user_info.get('email', '').split('@')[0]
         base_username = ''.join(c for c in base_username if c.isalnum() or c in '_-')
         
         if not base_username:

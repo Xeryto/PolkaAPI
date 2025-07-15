@@ -14,6 +14,12 @@ class Gender(str, Enum):
     MALE = "male"
     FEMALE = "female"
 
+class FriendRequestStatus(str, Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
+
 class User(Base):
     """User model"""
     __tablename__ = "users"
@@ -22,12 +28,9 @@ class User(Base):
     username = Column(String(50), unique=True, nullable=False, index=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=True)  # Nullable for OAuth users
-    first_name = Column(String(100), nullable=True)
-    last_name = Column(String(100), nullable=True)
     gender = Column(SQLEnum(Gender), nullable=True)  # NEW: Gender field
     selected_size = Column(String(10), nullable=True)  # NEW: User's preferred size
     avatar_url = Column(String(500), nullable=True)
-    is_profile_complete = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
     is_verified = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -37,6 +40,12 @@ class User(Base):
     oauth_accounts = relationship("OAuthAccount", back_populates="user", cascade="all, delete-orphan")
     favorite_brands = relationship("UserBrand", back_populates="user", cascade="all, delete-orphan")
     favorite_styles = relationship("UserStyle", back_populates="user", cascade="all, delete-orphan")
+    
+    # Friend relationships
+    sent_friend_requests = relationship("FriendRequest", foreign_keys="FriendRequest.sender_id", back_populates="sender", cascade="all, delete-orphan")
+    received_friend_requests = relationship("FriendRequest", foreign_keys="FriendRequest.recipient_id", back_populates="recipient", cascade="all, delete-orphan")
+    friendships = relationship("Friendship", foreign_keys="Friendship.user_id", back_populates="user", cascade="all, delete-orphan")
+    friends = relationship("Friendship", foreign_keys="Friendship.friend_id", back_populates="friend", cascade="all, delete-orphan")
 
 class OAuthAccount(Base):
     """OAuth account model for social login"""
@@ -116,4 +125,72 @@ class UserStyle(Base):
     # Ensure unique user-style combinations
     __table_args__ = (
         # Unique constraint to prevent duplicate user-style relationships
+    )
+
+class Product(Base):
+    """Product model for recommendations"""
+    __tablename__ = "products"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(255), nullable=False)
+    price = Column(String(50), nullable=False) # Storing as string to include currency symbol
+    image_url = Column(String(500), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class UserLikedProduct(Base):
+    """User-Product many-to-many relationship for liked items"""
+    __tablename__ = "user_liked_products"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    product_id = Column(String, ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    user = relationship("User", back_populates="liked_products")
+    product = relationship("Product")
+    
+    __table_args__ = (
+        # Unique constraint to prevent duplicate user-product relationships
+    )
+
+# Add liked_products relationship to User model
+User.liked_products = relationship("UserLikedProduct", back_populates="user", cascade="all, delete-orphan")
+
+class FriendRequest(Base):
+    """Friend request model"""
+    __tablename__ = "friend_requests"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    sender_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    recipient_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    status = Column(SQLEnum(FriendRequestStatus), default=FriendRequestStatus.PENDING, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    sender = relationship("User", foreign_keys=[sender_id], back_populates="sent_friend_requests")
+    recipient = relationship("User", foreign_keys=[recipient_id], back_populates="received_friend_requests")
+    
+    # Ensure unique sender-recipient combinations
+    __table_args__ = (
+        # Unique constraint to prevent duplicate friend requests
+    )
+
+class Friendship(Base):
+    """Friendship model for accepted friend relationships"""
+    __tablename__ = "friendships"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    friend_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", foreign_keys=[user_id], back_populates="friendships")
+    friend = relationship("User", foreign_keys=[friend_id], back_populates="friends")
+    
+    # Ensure unique user-friend combinations
+    __table_args__ = (
+        # Unique constraint to prevent duplicate friendships
     ) 

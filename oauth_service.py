@@ -75,8 +75,6 @@ class OAuthService:
                         'provider': 'google',
                         'provider_user_id': data['id'],
                         'email': data['email'],
-                        'first_name': data.get('given_name'),
-                        'last_name': data.get('family_name'),
                         'avatar_url': data.get('picture'),
                         'is_verified': data.get('verified_email', False)
                     }
@@ -91,7 +89,7 @@ class OAuthService:
                 response = await client.get(
                     'https://graph.facebook.com/me',
                     params={
-                        'fields': 'id,email,first_name,last_name,picture',
+                        'fields': 'id,email,picture',
                         'access_token': token
                     }
                 )
@@ -101,8 +99,6 @@ class OAuthService:
                         'provider': 'facebook',
                         'provider_user_id': data['id'],
                         'email': data.get('email'),
-                        'first_name': data.get('first_name'),
-                        'last_name': data.get('last_name'),
                         'avatar_url': data.get('picture', {}).get('data', {}).get('url'),
                         'is_verified': True  # Facebook accounts are generally verified
                     }
@@ -145,8 +141,6 @@ class OAuthService:
                         'provider': 'github',
                         'provider_user_id': str(user_data['id']),
                         'email': email,
-                        'first_name': user_data.get('name', '').split()[0] if user_data.get('name') else None,
-                        'last_name': ' '.join(user_data.get('name', '').split()[1:]) if user_data.get('name') and len(user_data.get('name', '').split()) > 1 else None,
                         'avatar_url': user_data.get('avatar_url'),
                         'is_verified': True  # GitHub accounts are generally verified
                     }
@@ -165,8 +159,6 @@ class OAuthService:
                 'provider': 'apple',
                 'provider_user_id': decoded.get('sub'),
                 'email': decoded.get('email'),
-                'first_name': None,  # Apple doesn't provide name in ID token
-                'last_name': None,
                 'avatar_url': None,
                 'is_verified': True
             }

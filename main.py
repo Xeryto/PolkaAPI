@@ -11,7 +11,7 @@ import re
 # Import our modules
 from config import settings
 from database import get_db, init_db
-from models import User, OAuthAccount, Brand, Style, UserBrand, UserStyle, Gender
+from models import User, OAuthAccount, Brand, Style, UserBrand, UserStyle, Gender, FriendRequest, Friendship, FriendRequestStatus
 from auth_service import auth_service
 from oauth_service import oauth_service
 
@@ -40,8 +40,6 @@ class UserCreate(BaseModel):
     username: str
     email: EmailStr
     password: str
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
     
     @validator('username')
     def validate_username(cls, v):
@@ -92,10 +90,7 @@ class UserResponse(BaseModel):
     id: str
     username: str
     email: str
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
     avatar_url: Optional[str] = None
-    is_profile_complete: bool = False
     is_verified: bool = False
     created_at: datetime
     updated_at: datetime
@@ -117,8 +112,6 @@ class TokenData(BaseModel):
 class UserProfileUpdate(BaseModel):
     gender: Optional[Gender] = None
     selected_size: Optional[str] = None
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
 
 class BrandResponse(BaseModel):
     id: int
@@ -143,17 +136,46 @@ class EnhancedUserResponse(BaseModel):
     id: str
     username: str
     email: str
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
     gender: Optional[Gender] = None
     selected_size: Optional[str] = None
     avatar_url: Optional[str] = None
-    is_profile_complete: bool = False
     is_verified: bool = False
     favorite_brands: List[BrandResponse] = []
     favorite_styles: List[StyleResponse] = []
     created_at: datetime
     updated_at: datetime
+
+# Friend System Models
+class FriendRequestCreate(BaseModel):
+    recipient_identifier: str  # username or email
+
+class FriendRequestResponse(BaseModel):
+    id: str
+    recipient: dict  # { "id": "user_id", "username": "recipient_username" }
+    status: str
+
+class ReceivedFriendRequestResponse(BaseModel):
+    id: str
+    sender: dict  # { "id": "user_id", "username": "sender_username" }
+    status: str
+
+class FriendResponse(BaseModel):
+    id: str
+    username: str
+
+class UserSearchResponse(BaseModel):
+    id: str
+    username: str
+    email: str
+    friend_status: Optional[str] = None # 'friend', 'request_received', 'request_sent', 'not_friend'
+
+class PublicUserProfileResponse(BaseModel):
+    id: str
+    username: str
+    gender: Optional[Gender] = None
+
+class MessageResponse(BaseModel):
+    message: str
 
 # Dependency to get current user
 def get_current_user(
@@ -200,9 +222,7 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
         db=db,
         username=user_data.username,
         email=user_data.email,
-        password_hash=password_hash,
-        first_name=user_data.first_name,
-        last_name=user_data.last_name
+        password_hash=password_hash
     )
     
     # Create access token
@@ -218,10 +238,7 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
             id=user.id,
             username=user.username,
             email=user.email,
-            first_name=user.first_name,
-            last_name=user.last_name,
             avatar_url=user.avatar_url,
-            is_profile_complete=user.is_profile_complete,
             is_verified=user.is_verified,
             created_at=user.created_at,
             updated_at=user.updated_at
@@ -268,10 +285,7 @@ async def login(user_data: UserLogin, db: Session = Depends(get_db)):
             id=user.id,
             username=user.username,
             email=user.email,
-            first_name=user.first_name,
-            last_name=user.last_name,
             avatar_url=user.avatar_url,
-            is_profile_complete=user.is_profile_complete,
             is_verified=user.is_verified,
             created_at=user.created_at,
             updated_at=user.updated_at
@@ -416,12 +430,9 @@ async def get_user_profile(current_user: User = Depends(get_current_user), db: S
         id=current_user.id,
         username=current_user.username,
         email=current_user.email,
-        first_name=current_user.first_name,
-        last_name=current_user.last_name,
         gender=current_user.gender,
         selected_size=current_user.selected_size,
         avatar_url=current_user.avatar_url,
-        is_profile_complete=current_user.is_profile_complete,
         is_verified=current_user.is_verified,
         favorite_brands=[BrandResponse(
             id=ub.brand.id,
@@ -441,21 +452,29 @@ async def get_user_profile(current_user: User = Depends(get_current_user), db: S
     )
 
 @app.get("/api/v1/user/profile/completion-status")
-async def get_profile_completion_status(current_user: User = Depends(get_current_user)):
+async def get_profile_completion_status(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Check user profile completion status"""
     missing_fields = []
     required_screens = []
     
-    if not current_user.first_name:
-        missing_fields.append('first_name')
-    if not current_user.last_name:
-        missing_fields.append('last_name')
-    if not current_user.is_profile_complete:
-        missing_fields.append('profile_completion')
-        required_screens.append('confirmation')
+    is_gender_complete = current_user.gender is not None
+    is_brands_complete = db.query(UserBrand).filter(UserBrand.user_id == current_user.id).count() > 0
+    is_styles_complete = db.query(UserStyle).filter(UserStyle.user_id == current_user.id).count() > 0
+    
+    is_complete = is_gender_complete and is_brands_complete and is_styles_complete
+    
+    if not is_gender_complete:
+        missing_fields.append('gender')
+        required_screens.append('gender_selection') # Assuming a screen for gender selection
+    if not is_brands_complete:
+        missing_fields.append('favorite_brands')
+        required_screens.append('brand_selection') # Assuming a screen for brand selection
+    if not is_styles_complete:
+        missing_fields.append('favorite_styles')
+        required_screens.append('style_selection') # Assuming a screen for style selection
     
     return {
-        "isComplete": current_user.is_profile_complete,
+        "isComplete": is_complete,
         "missingFields": missing_fields,
         "requiredScreens": required_screens
     }
@@ -489,18 +508,11 @@ async def update_user_profile(
         current_user.gender = profile_data.gender
     if profile_data.selected_size is not None:
         current_user.selected_size = profile_data.selected_size
-    if profile_data.first_name is not None:
-        current_user.first_name = profile_data.first_name
-    if profile_data.last_name is not None:
-        current_user.last_name = profile_data.last_name
     
     # Update profile completion status
-    current_user.is_profile_complete = bool(
-        current_user.first_name and 
-        current_user.last_name and 
-        current_user.gender and 
-        current_user.selected_size
-    )
+    # The is_profile_complete status is now determined by the /api/v1/user/profile/completion-status endpoint
+    # and is based on gender, favorite brands, and favorite styles.
+    # This field is no longer directly updated here.
     
     current_user.updated_at = datetime.utcnow()
     db.commit()
@@ -514,12 +526,9 @@ async def update_user_profile(
         id=current_user.id,
         username=current_user.username,
         email=current_user.email,
-        first_name=current_user.first_name,
-        last_name=current_user.last_name,
         gender=current_user.gender,
         selected_size=current_user.selected_size,
         avatar_url=current_user.avatar_url,
-        is_profile_complete=current_user.is_profile_complete,
         is_verified=current_user.is_verified,
         favorite_brands=[BrandResponse(
             id=ub.brand.id,
@@ -618,6 +627,332 @@ async def update_user_styles(
     
     db.commit()
     return {"message": "Favorite styles updated successfully"}
+
+# Friend System Endpoints
+@app.post("/api/v1/friends/request", response_model=MessageResponse)
+async def send_friend_request(
+    request_data: FriendRequestCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Send a friend request to another user"""
+    # Find recipient by username or email
+    recipient = None
+    if '@' in request_data.recipient_identifier:
+        recipient = db.query(User).filter(User.email == request_data.recipient_identifier).first()
+    else:
+        recipient = db.query(User).filter(User.username == request_data.recipient_identifier).first()
+    
+    if not recipient:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User not found"
+        )
+    
+    if recipient.id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot send friend request to yourself"
+        )
+    
+    # Check if already friends
+    existing_friendship = db.query(Friendship).filter(
+        ((Friendship.user_id == current_user.id) & (Friendship.friend_id == recipient.id)) |
+        ((Friendship.user_id == recipient.id) & (Friendship.friend_id == current_user.id))
+    ).first()
+    
+    if existing_friendship:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Already friends"
+        )
+    
+    # Check if friend request already exists
+    existing_request = db.query(FriendRequest).filter(
+        ((FriendRequest.sender_id == current_user.id) & (FriendRequest.recipient_id == recipient.id)) |
+        ((FriendRequest.sender_id == recipient.id) & (FriendRequest.recipient_id == current_user.id))
+    ).first()
+    
+    if existing_request:
+        if existing_request.status == FriendRequestStatus.PENDING:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Friend request already pending"
+            )
+    
+    # Create new friend request
+    friend_request = FriendRequest(
+        sender_id=current_user.id,
+        recipient_id=recipient.id,
+        status=FriendRequestStatus.PENDING
+    )
+    
+    db.add(friend_request)
+    db.commit()
+    
+    return {"message": "Friend request sent."}
+
+@app.get("/api/v1/friends/requests/sent", response_model=List[FriendRequestResponse])
+async def get_sent_friend_requests(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get sent friend requests"""
+    requests = db.query(FriendRequest).filter(
+        FriendRequest.sender_id == current_user.id
+    ).all()
+    
+    return [
+        {
+            "id": req.id,
+            "recipient": {
+                "id": req.recipient.id,
+                "username": req.recipient.username
+            },
+            "status": req.status
+        }
+        for req in requests
+    ]
+
+@app.get("/api/v1/friends/requests/received", response_model=List[ReceivedFriendRequestResponse])
+async def get_received_friend_requests(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get received friend requests"""
+    requests = db.query(FriendRequest).filter(
+        FriendRequest.recipient_id == current_user.id,
+        FriendRequest.status == FriendRequestStatus.PENDING
+    ).all()
+    
+    return [
+        {
+            "id": req.id,
+            "sender": {
+                "id": req.sender.id,
+                "username": req.sender.username
+            },
+            "status": req.status
+        }
+        for req in requests
+    ]
+
+@app.post("/api/v1/friends/requests/{request_id}/accept", response_model=MessageResponse)
+async def accept_friend_request(
+    request_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Accept a friend request"""
+    friend_request = db.query(FriendRequest).filter(
+        FriendRequest.id == request_id,
+        FriendRequest.recipient_id == current_user.id,
+        FriendRequest.status == FriendRequestStatus.PENDING
+    ).first()
+    
+    if not friend_request:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Friend request not found or not pending"
+        )
+    
+    # Update request status
+    friend_request.status = FriendRequestStatus.ACCEPTED
+    friend_request.updated_at = datetime.utcnow()
+    
+    # Create friendship
+    friendship = Friendship(
+        user_id=friend_request.sender_id,
+        friend_id=friend_request.recipient_id
+    )
+    
+    db.add(friendship)
+    db.delete(friend_request) # Delete the friend request after acceptance
+    db.commit()
+    
+    return {"message": "Friend request accepted."}
+
+@app.post("/api/v1/friends/requests/{request_id}/reject", response_model=MessageResponse)
+async def reject_friend_request(
+    request_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Reject a friend request"""
+    friend_request = db.query(FriendRequest).filter(
+        FriendRequest.id == request_id,
+        FriendRequest.recipient_id == current_user.id,
+        FriendRequest.status == FriendRequestStatus.PENDING
+    ).first()
+    
+    if not friend_request:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Friend request not found or not pending"
+        )
+    
+    friend_request.status = FriendRequestStatus.REJECTED
+    friend_request.updated_at = datetime.utcnow()
+    db.delete(friend_request) # Delete the friend request after rejection
+    db.commit()
+    
+    return {"message": "Friend request rejected."}
+
+@app.delete("/api/v1/friends/requests/{request_id}/cancel", response_model=MessageResponse)
+async def cancel_friend_request(
+    request_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Cancel a sent friend request"""
+    friend_request = db.query(FriendRequest).filter(
+        FriendRequest.id == request_id,
+        FriendRequest.sender_id == current_user.id,
+        FriendRequest.status == FriendRequestStatus.PENDING
+    ).first()
+    
+    if not friend_request:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Friend request not found or not pending"
+        )
+    
+    friend_request.status = FriendRequestStatus.CANCELLED
+    friend_request.updated_at = datetime.utcnow()
+    db.delete(friend_request) # Delete the friend request after cancellation
+    db.commit()
+    
+    return {"message": "Friend request cancelled."}
+
+@app.get("/api/v1/friends", response_model=List[FriendResponse])
+async def get_friends_list(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get user's friends list"""
+    # Get friendships where current user is either user or friend
+    friendships = db.query(Friendship).filter(
+        (Friendship.user_id == current_user.id) | (Friendship.friend_id == current_user.id)
+    ).all()
+    
+    friends = []
+    for friendship in friendships:
+        if friendship.user_id == current_user.id:
+            friend_user = db.query(User).filter(User.id == friendship.friend_id).first()
+        else:
+            friend_user = db.query(User).filter(User.id == friendship.user_id).first()
+        
+        if friend_user:
+            friends.append({
+                "id": friend_user.id,
+                "username": friend_user.username
+            })
+    
+    return friends
+
+@app.delete("/api/v1/friends/{friend_id}", response_model=MessageResponse)
+async def remove_friend(
+    friend_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Remove a friend"""
+    # Find the friendship entry
+    friendship = db.query(Friendship).filter(
+        ((Friendship.user_id == current_user.id) & (Friendship.friend_id == friend_id)) |
+        ((Friendship.user_id == friend_id) & (Friendship.friend_id == current_user.id))
+    ).first()
+
+    if not friendship:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Friendship not found"
+        )
+
+    db.delete(friendship)
+    db.commit()
+
+    return {"message": "Friend removed successfully"}
+
+@app.get("/api/v1/users/search", response_model=List[UserSearchResponse])
+async def search_users(
+    query: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Search for users by username or email"""
+    if len(query) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Search query must be at least 2 characters"
+        )
+    
+    # Search by username or email (case insensitive)
+    users = db.query(User).filter(
+        (User.username.ilike(f"%{query}%") | User.email.ilike(f"%{query}%")) &
+        (User.id != current_user.id)  # Exclude current user
+    ).limit(20).all()
+    
+    result = []
+    for user in users:
+        friend_status = 'not_friend'
+        
+        # Check if already friends
+        existing_friendship = db.query(Friendship).filter(
+            ((Friendship.user_id == current_user.id) & (Friendship.friend_id == user.id)) |
+            ((Friendship.user_id == user.id) & (Friendship.friend_id == current_user.id))
+        ).first()
+        
+        if existing_friendship:
+            friend_status = 'friend'
+        else:
+            # Check for pending friend requests
+            sent_request = db.query(FriendRequest).filter(
+                FriendRequest.sender_id == current_user.id,
+                FriendRequest.recipient_id == user.id,
+                FriendRequest.status == FriendRequestStatus.PENDING
+            ).first()
+            
+            received_request = db.query(FriendRequest).filter(
+                FriendRequest.sender_id == user.id,
+                FriendRequest.recipient_id == current_user.id,
+                FriendRequest.status == FriendRequestStatus.PENDING
+            ).first()
+            
+            if sent_request:
+                friend_status = 'request_sent'
+            elif received_request:
+                friend_status = 'request_received'
+        
+        result.append({
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "friend_status": friend_status
+        })
+    
+    return result
+
+@app.get("/api/v1/users/{user_id}/profile", response_model=PublicUserProfileResponse)
+async def get_public_user_profile(
+    user_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get public profile of another user"""
+    user = db.query(User).filter(User.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    return {
+        "id": user.id,
+        "username": user.username,
+        "gender": user.gender
+    }
 
 # Health check endpoint
 @app.get("/health")
