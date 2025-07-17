@@ -23,6 +23,7 @@ class FriendRequestStatus(str, Enum):
 class User(Base):
     """User model"""
     __tablename__ = "users"
+    __table_args__ = {"extend_existing": True}
     
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     username = Column(String(50), unique=True, nullable=False, index=True)
@@ -50,6 +51,7 @@ class User(Base):
 class OAuthAccount(Base):
     """OAuth account model for social login"""
     __tablename__ = "oauth_accounts"
+    __table_args__ = {"extend_existing": True}
     
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
@@ -73,6 +75,7 @@ class OAuthAccount(Base):
 class Brand(Base):
     """Brand model"""
     __tablename__ = "brands"
+    __table_args__ = {"extend_existing": True}
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(100), unique=True, nullable=False)
@@ -93,9 +96,21 @@ class Style(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+class Category(Base):
+    """Category model for products"""
+    __tablename__ = "categories"
+
+    id = Column(String(50), primary_key=True) # e.g., "dresses", "shirts"
+    name = Column(String(100), unique=True, nullable=False)
+    description = Column(String(500), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class UserBrand(Base):
     """User-Brand many-to-many relationship"""
     __tablename__ = "user_brands"
+    __table_args__ = {"extend_existing": True}
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
@@ -113,6 +128,7 @@ class UserBrand(Base):
 class UserStyle(Base):
     """User-Style many-to-many relationship"""
     __tablename__ = "user_styles"
+    __table_args__ = {"extend_existing": True}
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
@@ -127,20 +143,42 @@ class UserStyle(Base):
         # Unique constraint to prevent duplicate user-style relationships
     )
 
+class ProductStyle(Base):
+    """Product-Style many-to-many association table"""
+    __tablename__ = "product_styles"
+    __table_args__ = {"extend_existing": True}
+
+    product_id = Column(String, ForeignKey("products.id", ondelete="CASCADE"), primary_key=True)
+    style_id = Column(String(50), ForeignKey("styles.id", ondelete="CASCADE"), primary_key=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    product = relationship("Product", back_populates="styles")
+    style = relationship("Style", back_populates="products")
+
+
 class Product(Base):
     """Product model for recommendations"""
     __tablename__ = "products"
+    __table_args__ = {"extend_existing": True}
     
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(255), nullable=False)
+    description = Column(String(1000), nullable=True)
     price = Column(String(50), nullable=False) # Storing as string to include currency symbol
     image_url = Column(String(500), nullable=True)
+    brand_id = Column(Integer, ForeignKey("brands.id"), nullable=False)
+    category_id = Column(String(50), ForeignKey("categories.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    brand = relationship("Brand")
+    category = relationship("Category")
+    styles = relationship("ProductStyle", back_populates="product", cascade="all, delete-orphan")
 
 class UserLikedProduct(Base):
     """User-Product many-to-many relationship for liked items"""
     __tablename__ = "user_liked_products"
+    __table_args__ = {"extend_existing": True}
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
@@ -160,6 +198,7 @@ User.liked_products = relationship("UserLikedProduct", back_populates="user", ca
 class FriendRequest(Base):
     """Friend request model"""
     __tablename__ = "friend_requests"
+    __table_args__ = {"extend_existing": True}
     
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     sender_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
@@ -180,6 +219,7 @@ class FriendRequest(Base):
 class Friendship(Base):
     """Friendship model for accepted friend relationships"""
     __tablename__ = "friendships"
+    __table_args__ = {"extend_existing": True}
     
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
@@ -193,4 +233,7 @@ class Friendship(Base):
     # Ensure unique user-friend combinations
     __table_args__ = (
         # Unique constraint to prevent duplicate friendships
-    ) 
+    )
+
+# Add products relationship to Style model
+Style.products = relationship("ProductStyle", back_populates="style", cascade="all, delete-orphan") 

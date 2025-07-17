@@ -1,101 +1,146 @@
-#!/usr/bin/env python3
-"""
-Script to populate the database with sample brands and styles data
-"""
-from database import SessionLocal, init_db
-from models import Brand, Style
 from sqlalchemy.orm import Session
+from database import SessionLocal, engine, Base
+from models import Brand, Style, Product, ProductStyle, Category
+import uuid
 
-# Sample brands data
-BRANDS_DATA = [
-    {"id": 1, "name": "Армани", "slug": "armani", "description": "Итальянский дом моды"},
-    {"id": 2, "name": "Бурберри", "slug": "burberry", "description": "Британский люксовый бренд"},
-    {"id": 3, "name": "Гуччи", "slug": "gucci", "description": "Итальянский модный дом"},
-    {"id": 4, "name": "Хьюго Босс", "slug": "hugo-boss", "description": "Немецкий бренд премиум-класса"},
-    {"id": 5, "name": "Ральф Лорен", "slug": "ralph-lauren", "description": "Американский бренд классической одежды"},
-    {"id": 6, "name": "Версаче", "slug": "versace", "description": "Итальянский дом моды"},
-    {"id": 7, "name": "Прада", "slug": "prada", "description": "Итальянский люксовый бренд"},
-    {"id": 8, "name": "Кельвин Кляйн", "slug": "calvin-klein", "description": "Американский бренд одежды"},
-    {"id": 9, "name": "Балман", "slug": "balmain", "description": "Французский дом моды"},
-    {"id": 10, "name": "Фенди", "slug": "fendi", "description": "Итальянский люксовый бренд"},
-    {"id": 11, "name": "Том Форд", "slug": "tom-ford", "description": "Американский дизайнер"},
-    {"id": 12, "name": "Шанель", "slug": "chanel", "description": "Французский дом моды"}
-]
-
-# Sample styles data
-STYLES_DATA = [
-    {"id": "casual", "name": "Повседневный", "description": "Комфортная одежда для ежедневной носки"},
-    {"id": "formal", "name": "Деловой", "description": "Элегантная одежда для офиса и встреч"},
-    {"id": "sport", "name": "Спортивный", "description": "Функциональная одежда для активного образа жизни"},
-    {"id": "romantic", "name": "Романтичный", "description": "Женственные, изящные силуэты"},
-    {"id": "streetwear", "name": "Уличный", "description": "Современный городской стиль"},
-    {"id": "vintage", "name": "Винтаж", "description": "Классические силуэты прошлых десятилетий"},
-    {"id": "minimalist", "name": "Минимализм", "description": "Простые, лаконичные силуэты и нейтральные цвета"},
-    {"id": "bohemian", "name": "Богемный", "description": "Свободные силуэты и этнические мотивы"}
-]
-
-def populate_brands(db: Session):
-    """Populate brands table with sample data"""
-    print("📦 Populating brands...")
-    
-    for brand_data in BRANDS_DATA:
-        # Check if brand already exists
-        existing_brand = db.query(Brand).filter(Brand.id == brand_data["id"]).first()
-        if existing_brand:
-            print(f"  ⚠️  Brand {brand_data['name']} already exists, skipping...")
-            continue
-        
-        brand = Brand(**brand_data)
-        db.add(brand)
-        print(f"  ✅ Added brand: {brand_data['name']}")
-    
-    db.commit()
-    print(f"✅ Successfully populated {len(BRANDS_DATA)} brands")
-
-def populate_styles(db: Session):
-    """Populate styles table with sample data"""
-    print("🎨 Populating styles...")
-    
-    for style_data in STYLES_DATA:
-        # Check if style already exists
-        existing_style = db.query(Style).filter(Style.id == style_data["id"]).first()
-        if existing_style:
-            print(f"  ⚠️  Style {style_data['name']} already exists, skipping...")
-            continue
-        
-        style = Style(**style_data)
-        db.add(style)
-        print(f"  ✅ Added style: {style_data['name']}")
-    
-    db.commit()
-    print(f"✅ Successfully populated {len(STYLES_DATA)} styles")
-
-def main():
-    """Main function to populate all data"""
-    print("🚀 Starting database population...")
-    
-    # Initialize database
-    init_db()
-    
-    # Get database session
-    db = SessionLocal()
-    
+def populate_initial_data():
+    db: Session = SessionLocal()
     try:
-        # Populate brands
-        populate_brands(db)
-        print()
+        # Populate Brands
+        brands_data = [
+            {"name": "Nike", "slug": "nike", "logo": "https://example.com/logos/nike.png", "description": "Global leader in athletic footwear, apparel, equipment, accessories, and services."},
+            {"name": "Adidas", "slug": "adidas", "logo": "https://example.com/logos/adidas.png", "description": "German multinational corporation, designs and manufactures shoes, clothing and accessories."},
+            {"name": "Zara", "slug": "zara", "logo": "https://example.com/logos/zara.png", "description": "Spanish apparel retailer based in Arteixo, Galicia, Spain."},
+            {"name": "H&M", "slug": "h&m", "logo": "https://example.com/logos/h&m.png", "description": "Swedish multinational clothing-retail company known for its fast-fashion clothing for men, women, teenagers and children."}
+        ]
+        for b_data in brands_data:
+            if not db.query(Brand).filter(Brand.name == b_data["name"]).first():
+                db.add(Brand(**b_data))
+        db.commit()
+        print("Brands populated.")
+
+        # Populate Styles
+        styles_data = [
+            {"id": "casual", "name": "Casual", "description": "Relaxed, comfortable, and suitable for everyday wear.", "image": "https://example.com/styles/casual.jpg"},
+            {"id": "sporty", "name": "Sporty", "description": "Athletic-inspired, comfortable, and functional.", "image": "https://example.com/styles/sporty.jpg"},
+            {"id": "elegant", "name": "Elegant", "description": "Sophisticated, graceful, and refined.", "image": "https://example.com/styles/elegant.jpg"},
+            {"id": "streetwear", "name": "Streetwear", "description": "Comfortable, casual clothing inspired by hip-hop and skate culture.", "image": "https://example.com/styles/streetwear.jpg"}
+        ]
+        for s_data in styles_data:
+            if not db.query(Style).filter(Style.id == s_data["id"]).first():
+                db.add(Style(**s_data))
+        db.commit()
+        print("Styles populated.")
+
+        # Populate Categories
+        categories_data = [
+            {"id": "tshirts", "name": "T-Shirts", "description": "Casual tops for everyday wear."},
+            {"id": "jeans", "name": "Jeans", "description": "Durable denim trousers."},
+            {"id": "dresses", "name": "Dresses", "description": "One-piece garments for various occasions."},
+            {"id": "sneakers", "name": "Sneakers", "description": "Athletic and casual footwear."},
+            {"id": "hoodies", "name": "Hoodies", "description": "Comfortable hooded sweatshirts."}
+        ]
+        for c_data in categories_data:
+            if not db.query(Category).filter(Category.id == c_data["id"]).first():
+                db.add(Category(**c_data))
+        db.commit()
+        print("Categories populated.")
+
+        # Retrieve populated brands, styles, and categories
+        nike_brand = db.query(Brand).filter(Brand.name == "Nike").first()
+        adidas_brand = db.query(Brand).filter(Brand.name == "Adidas").first()
+        zara_brand = db.query(Brand).filter(Brand.name == "Zara").first()
+        hm_brand = db.query(Brand).filter(Brand.name == "H&M").first()
+
+        casual_style = db.query(Style).filter(Style.id == "casual").first()
+        sporty_style = db.query(Style).filter(Style.id == "sporty").first()
+        elegant_style = db.query(Style).filter(Style.id == "elegant").first()
+        streetwear_style = db.query(Style).filter(Style.id == "streetwear").first()
+
+        tshirts_category = db.query(Category).filter(Category.id == "tshirts").first()
+        jeans_category = db.query(Category).filter(Category.id == "jeans").first()
+        dresses_category = db.query(Category).filter(Category.id == "dresses").first()
+        sneakers_category = db.query(Category).filter(Category.id == "sneakers").first()
+        hoodies_category = db.query(Category).filter(Category.id == "hoodies").first()
+
+        # Populate Products and ProductStyles
+        products_data = [
+            {
+                "name": "Nike Air Max 270",
+                "description": "Comfortable and stylish everyday sneakers.",
+                "price": "150.00 р",
+                "image_url": "https://example.com/products/nike_airmax.jpg",
+                "brand": nike_brand,
+                "category": sneakers_category,
+                "styles": [sporty_style, casual_style]
+            },
+            {
+                "name": "Adidas Ultraboost 22",
+                "description": "Responsive running shoes for daily miles.",
+                "price": "180.00 р",
+                "image_url": "https://example.com/products/adidas_ultraboost.jpg",
+                "brand": adidas_brand,
+                "category": sneakers_category,
+                "styles": [sporty_style]
+            },
+            {
+                "name": "Zara Flowy Midi Dress",
+                "description": "Lightweight and elegant dress for any occasion.",
+                "price": "79.99 р",
+                "image_url": "https://example.com/products/zara_dress.jpg",
+                "brand": zara_brand,
+                "category": dresses_category,
+                "styles": [elegant_style, casual_style]
+            },
+            {
+                "name": "H&M Oversized Hoodie",
+                "description": "Cozy and trendy oversized hoodie.",
+                "price": "35.00 р",
+                "image_url": "https://example.com/products/hm_hoodie.jpg",
+                "brand": hm_brand,
+                "category": hoodies_category,
+                "styles": [casual_style, streetwear_style]
+            },
+            {
+                "name": "Nike Sportswear Tech Fleece",
+                "description": "Premium fleece for warmth without the weight.",
+                "price": "110.00 р",
+                "image_url": "https://example.com/products/nike_techfleece.jpg",
+                "brand": nike_brand,
+                "category": hoodies_category,
+                "styles": [sporty_style, casual_style, streetwear_style]
+            }
+        ]
+
+        for p_data in products_data:
+            if not db.query(Product).filter(Product.name == p_data["name"]).first():
+                product = Product(
+                    id=str(uuid.uuid4()),
+                    name=p_data["name"],
+                    description=p_data["description"],
+                    price=p_data["price"],
+                    image_url=p_data["image_url"],
+                    brand_id=p_data["brand"].id,
+                    category_id=p_data["category"].id
+                )
+                db.add(product)
+                db.flush() # Flush to get product.id
+
+                for style in p_data["styles"]:
+                    product_style = ProductStyle(product_id=product.id, style_id=style.id)
+                    db.add(product_style)
+                print(f"Added product: {product.name}")
+            else:
+                print(f"Product already exists: {p_data['name']}")
         
-        # Populate styles
-        populate_styles(db)
-        print()
-        
-        print("🎉 Database population completed successfully!")
-        
+        db.commit()
     except Exception as e:
-        print(f"❌ Error populating database: {e}")
         db.rollback()
+        print(f"Error populating data: {e}")
     finally:
         db.close()
 
 if __name__ == "__main__":
-    main() 
+    print("Populating initial data (Brands, Styles, Products)...")
+    populate_initial_data()
+    print("Initial data population complete.")

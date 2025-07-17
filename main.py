@@ -3,15 +3,16 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, validator
-from typing import Optional, List
+from typing import Optional, List, Literal
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from datetime import datetime, timedelta
 import re
 
 # Import our modules
 from config import settings
 from database import get_db, init_db
-from models import User, OAuthAccount, Brand, Style, UserBrand, UserStyle, Gender, FriendRequest, Friendship, FriendRequestStatus
+from models import User, OAuthAccount, Brand, Style, UserBrand, UserStyle, Gender, FriendRequest, Friendship, FriendRequestStatus, Product, UserLikedProduct, ProductStyle, Category
 from auth_service import auth_service
 from oauth_service import oauth_service
 
@@ -126,6 +127,11 @@ class StyleResponse(BaseModel):
     description: Optional[str] = None
     image: Optional[str] = None
 
+class CategoryResponse(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+
 class UserBrandsUpdate(BaseModel):
     brand_ids: List[int]
 
@@ -176,6 +182,17 @@ class PublicUserProfileResponse(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+class ProductResponse(BaseModel):
+    id: str
+    name: str
+    price: str
+    image_url: Optional[str] = None
+    is_liked: Optional[bool] = None # Only for /for_user endpoint
+
+class ToggleFavoriteRequest(BaseModel):
+    product_id: str
+    action: Literal["like", "unlike"]
 
 # Dependency to get current user
 def get_current_user(
@@ -627,6 +644,196 @@ async def update_user_styles(
     
     db.commit()
     return {"message": "Favorite styles updated successfully"}
+
+@app.get("/api/v1/categories", response_model=List[CategoryResponse])
+async def get_categories(db: Session = Depends(get_db)):
+    """Get all available categories"""
+    categories = db.query(Category).all()
+    return [
+        CategoryResponse(
+            id=category.id,
+            name=category.name,
+            description=category.description
+        ) for category in categories
+    ]
+
+# Liking Items Endpoint
+@app.post("/api/v1/user/favorites/toggle", response_model=MessageResponse)
+async def toggle_favorite_item(
+    toggle_data: ToggleFavoriteRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Add or remove an item from the user's favorites (liked items)"""
+    product_id = toggle_data.product_id
+    action = toggle_data.action
+
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found"
+        )
+
+    existing_like = db.query(UserLikedProduct).filter(
+        UserLikedProduct.user_id == current_user.id,
+        UserLikedProduct.product_id == product_id
+    ).first()
+
+    if action == "like":
+        if existing_like:
+            return {"message": "Item already liked."}
+        else:
+            user_liked_product = UserLikedProduct(
+                user_id=current_user.id,
+                product_id=product_id
+            )
+            db.add(user_liked_product)
+            db.commit()
+            return {"message": "Item liked successfully."}
+    elif action == "unlike":
+        if existing_like:
+            db.delete(existing_like)
+            db.commit()
+            return {"message": "Item unliked successfully."}
+        else:
+            return {"message": "Item is not liked."}
+
+# Get User Favorites Endpoint
+@app.get("/api/v1/user/favorites", response_model=List[ProductResponse])
+async def get_user_favorites(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all products liked by the current user"""
+    liked_products = db.query(Product).join(UserLikedProduct).filter(
+        UserLikedProduct.user_id == current_user.id
+    ).all()
+
+    results = []
+    for product in liked_products:
+        results.append(ProductResponse(
+            id=product.id,
+            name=product.name,
+            price=product.price,
+            image_url=product.image_url,
+            is_liked=True # All products returned here are liked by definition
+        ))
+    return results
+
+# Item Recommendations Endpoints
+@app.get("/api/v1/recommendations/for_user", response_model=List[ProductResponse])
+async def get_recommendations_for_user(
+    limit: int = 5, # Default to 5 products
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Provide recommended items for the current user"""
+    # This is a placeholder for a real recommendation engine.
+    # For now, return a few random products and mark if liked by the user
+    all_products = db.query(Product).order_by(func.random()).limit(limit).all() # Get random products
+    liked_product_ids = {ulp.product_id for ulp in current_user.liked_products}
+
+    recommendations = []
+    for product in all_products:
+        recommendations.append(ProductResponse(
+            id=product.id,
+            name=product.name,
+            price=product.price,
+            image_url=product.image_url,
+            is_liked=product.id in liked_product_ids
+        ))
+    return recommendations
+
+@app.get("/api/v1/recommendations/for_friend/{friend_id}", response_model=List[ProductResponse])
+async def get_recommendations_for_friend(
+    friend_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Provide recommended items for a specific friend"""
+    # Verify friendship (optional, but good practice for privacy)
+    friendship_exists = db.query(Friendship).filter(
+        ((Friendship.user_id == current_user.id) & (Friendship.friend_id == friend_id)) |
+        ((Friendship.user_id == friend_id) & (Friendship.friend_id == current_user.id))
+    ).first()
+
+    if not friendship_exists:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not friends with this user."
+        )
+
+    friend_user = db.query(User).filter(User.id == friend_id).first()
+    if not friend_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Friend not found."
+        )
+
+    # This is a placeholder for a real recommendation engine for a friend.
+    # Logic would be similar to for_user, but based on friend_user's profile and interactions.
+    # For now, return exactly 4 random products (without is_liked for friend's view)
+    all_products = db.query(Product).order_by(func.random()).limit(4).all() # Get 4 random products
+
+    recommendations = []
+    for product in all_products:
+        recommendations.append(ProductResponse(
+            id=product.id,
+            name=product.name,
+            price=product.price,
+            image_url=product.image_url
+        ))
+    return recommendations
+
+@app.get("/api/v1/products/search", response_model=List[ProductResponse])
+async def search_products(
+    query: Optional[str] = None,
+    category: Optional[str] = None,
+    brand: Optional[str] = None,
+    style: Optional[str] = None,
+    limit: int = 4,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Search for products based on query and filters"""
+    products_query = db.query(Product)
+
+    # Apply search query
+    if query:
+        search_pattern = f"%{query.lower()}%"
+        products_query = products_query.filter(
+            (Product.name.ilike(search_pattern)) |
+            (Product.description.ilike(search_pattern))
+        )
+
+    # Apply filters
+    if category and category != "Категория":
+        products_query = products_query.filter(Product.category_id == category)
+
+    if brand and brand != "Бренд":
+        products_query = products_query.join(Brand).filter(Brand.name.ilike(f"%{brand.lower()}%"))
+
+    if style and style != "Стиль":
+        products_query = products_query.join(Product.styles).join(Style).filter(Style.name.ilike(f"%{style.lower()}%"))
+
+    # Apply pagination
+    products_query = products_query.offset(offset).limit(limit)
+
+    products = products_query.all()
+    liked_product_ids = {ulp.product_id for ulp in current_user.liked_products}
+
+    results = []
+    for product in products:
+        results.append(ProductResponse(
+            id=product.id,
+            name=product.name,
+            price=product.price,
+            image_url=product.image_url,
+            is_liked=product.id in liked_product_ids
+        ))
+    return results
 
 # Friend System Endpoints
 @app.post("/api/v1/friends/request", response_model=MessageResponse)
