@@ -752,17 +752,17 @@ async def get_recommendations_for_friend(
     db: Session = Depends(get_db)
 ):
     """Provide recommended items for a specific friend"""
-    # Verify friendship (optional, but good practice for privacy)
-    friendship_exists = db.query(Friendship).filter(
-        ((Friendship.user_id == current_user.id) & (Friendship.friend_id == friend_id)) |
-        ((Friendship.user_id == friend_id) & (Friendship.friend_id == current_user.id))
-    ).first()
+    # # Verify friendship (optional, but good practice for privacy)
+    # friendship_exists = db.query(Friendship).filter(
+    #     ((Friendship.user_id == current_user.id) & (Friendship.friend_id == friend_id)) |
+    #     ((Friendship.user_id == friend_id) & (Friendship.friend_id == current_user.id))
+    # ).first()
 
-    if not friendship_exists:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not friends with this user."
-        )
+    # if not friendship_exists:
+    #     raise HTTPException(
+    #         status_code=status.HTTP_403_FORBIDDEN,
+    #         detail="You are not friends with this user."
+    #     )
 
     friend_user = db.query(User).filter(User.id == friend_id).first()
     if not friend_user:
@@ -773,8 +773,9 @@ async def get_recommendations_for_friend(
 
     # This is a placeholder for a real recommendation engine for a friend.
     # Logic would be similar to for_user, but based on friend_user's profile and interactions.
-    # For now, return exactly 4 random products (without is_liked for friend's view)
-    all_products = db.query(Product).order_by(func.random()).limit(4).all() # Get 4 random products
+    # For now, return exactly 8 random products (without is_liked for friend's view)
+    all_products = db.query(Product).order_by(func.random()).limit(8).all() # Get 8 random products
+    liked_product_ids = {ulp.product_id for ulp in current_user.liked_products}
 
     recommendations = []
     for product in all_products:
@@ -782,7 +783,8 @@ async def get_recommendations_for_friend(
             id=product.id,
             name=product.name,
             price=product.price,
-            image_url=product.image_url
+            image_url=product.image_url,
+            is_liked=product.id in liked_product_ids
         ))
     return recommendations
 
