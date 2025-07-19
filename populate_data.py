@@ -1,9 +1,10 @@
 from sqlalchemy.orm import Session
-from database import SessionLocal, engine, Base
+from database import SessionLocal, engine, Base, init_db
 from models import Brand, Style, Product, ProductStyle, Category
 import uuid
 
 def populate_initial_data():
+    init_db() # Ensure tables are created before populating data
     db: Session = SessionLocal()
     try:
         # Populate Brands
@@ -70,6 +71,7 @@ def populate_initial_data():
                 "description": "Comfortable and stylish everyday sneakers.",
                 "price": "150.00 р",
                 "image_url": "https://example.com/products/nike_airmax.jpg",
+                "available_sizes": "S,M,L",
                 "brand": nike_brand,
                 "category": sneakers_category,
                 "styles": [sporty_style, casual_style]
@@ -79,6 +81,7 @@ def populate_initial_data():
                 "description": "Responsive running shoes for daily miles.",
                 "price": "180.00 р",
                 "image_url": "https://example.com/products/adidas_ultraboost.jpg",
+                "available_sizes": "XS,S,M",
                 "brand": adidas_brand,
                 "category": sneakers_category,
                 "styles": [sporty_style]
@@ -88,6 +91,7 @@ def populate_initial_data():
                 "description": "Lightweight and elegant dress for any occasion.",
                 "price": "79.99 р",
                 "image_url": "https://example.com/products/zara_dress.jpg",
+                "available_sizes": "M,L,XL",
                 "brand": zara_brand,
                 "category": dresses_category,
                 "styles": [elegant_style, casual_style]
@@ -97,6 +101,7 @@ def populate_initial_data():
                 "description": "Cozy and trendy oversized hoodie.",
                 "price": "35.00 р",
                 "image_url": "https://example.com/products/hm_hoodie.jpg",
+                "available_sizes": "XS,S",
                 "brand": hm_brand,
                 "category": hoodies_category,
                 "styles": [casual_style, streetwear_style]
@@ -106,6 +111,7 @@ def populate_initial_data():
                 "description": "Premium fleece for warmth without the weight.",
                 "price": "110.00 р",
                 "image_url": "https://example.com/products/nike_techfleece.jpg",
+                "available_sizes": "S,M,L,XL",
                 "brand": nike_brand,
                 "category": hoodies_category,
                 "styles": [sporty_style, casual_style, streetwear_style]
@@ -120,6 +126,7 @@ def populate_initial_data():
                     description=p_data["description"],
                     price=p_data["price"],
                     image_url=p_data["image_url"],
+                    available_sizes=p_data["available_sizes"],
                     brand_id=p_data["brand"].id,
                     category_id=p_data["category"].id
                 )

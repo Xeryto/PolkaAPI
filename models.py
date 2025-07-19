@@ -166,6 +166,7 @@ class Product(Base):
     description = Column(String(1000), nullable=True)
     price = Column(String(50), nullable=False) # Storing as string to include currency symbol
     image_url = Column(String(500), nullable=True)
+    available_sizes = Column(String(255), nullable=True) # e.g., "XS,S,M,L,XL"
     brand_id = Column(Integer, ForeignKey("brands.id"), nullable=False)
     category_id = Column(String(50), ForeignKey("categories.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)

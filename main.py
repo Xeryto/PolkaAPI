@@ -188,6 +188,7 @@ class ProductResponse(BaseModel):
     name: str
     price: str
     image_url: Optional[str] = None
+    available_sizes: Optional[List[str]] = None
     is_liked: Optional[bool] = None # Only for /for_user endpoint
 
 class ToggleFavoriteRequest(BaseModel):
@@ -265,7 +266,7 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
 @app.post("/api/v1/auth/login", response_model=AuthResponse)
 async def login(user_data: UserLogin, db: Session = Depends(get_db)):
     """Login user with email or username and password"""
-    
+
     # Determine if the identifier is an email or username
     if user_data.is_email():
         user = auth_service.get_user_by_email(db, user_data.identifier)
@@ -717,6 +718,7 @@ async def get_user_favorites(
             name=product.name,
             price=product.price,
             image_url=product.image_url,
+            available_sizes=product.available_sizes.split(',') if product.available_sizes else None,
             is_liked=True # All products returned here are liked by definition
         ))
     return results
@@ -741,6 +743,7 @@ async def get_recommendations_for_user(
             name=product.name,
             price=product.price,
             image_url=product.image_url,
+            available_sizes=product.available_sizes.split(',') if product.available_sizes else None,
             is_liked=product.id in liked_product_ids
         ))
     return recommendations
@@ -784,6 +787,7 @@ async def get_recommendations_for_friend(
             name=product.name,
             price=product.price,
             image_url=product.image_url,
+            available_sizes=product.available_sizes.split(',') if product.available_sizes else None,
             is_liked=product.id in liked_product_ids
         ))
     return recommendations
@@ -833,6 +837,7 @@ async def search_products(
             name=product.name,
             price=product.price,
             image_url=product.image_url,
+            available_sizes=product.available_sizes.split(',') if product.available_sizes else None,
             is_liked=product.id in liked_product_ids
         ))
     return results
