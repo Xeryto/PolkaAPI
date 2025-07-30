@@ -7,8 +7,6 @@ Create Date: 2025-07-06 04:00:00.000000
 """
 from alembic import op
 import sqlalchemy as sa
-import uuid
-from datetime import datetime
 
 
 # revision identifiers, used by Alembic.

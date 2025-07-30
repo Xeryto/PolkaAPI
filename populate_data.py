@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from database import SessionLocal, engine, Base, init_db
+from database import SessionLocal, init_db
 from models import Brand, Style, Product, ProductStyle, Category
 import uuid
 

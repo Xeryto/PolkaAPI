@@ -2,19 +2,22 @@ from fastapi import FastAPI, HTTPException, Depends, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, EmailStr, validator
+from pydantic import BaseModel, EmailStr, validator, ValidationError
 from typing import Optional, List, Literal
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime, timedelta
 import re
+import json
 
 # Import our modules
 from config import settings
 from database import get_db, init_db
-from models import User, OAuthAccount, Brand, Style, UserBrand, UserStyle, Gender, FriendRequest, Friendship, FriendRequestStatus, Product, UserLikedProduct, ProductStyle, Category
+from models import User, OAuthAccount, Brand, Style, UserBrand, UserStyle, Gender, FriendRequest, Friendship, FriendRequestStatus, Product, UserLikedProduct, Category, Order, OrderItem, OrderStatus
 from auth_service import auth_service
 from oauth_service import oauth_service
+import payment_service
+import schemas
 
 app = FastAPI(
     title="PolkaAPI - Authentication Backend",
@@ -194,6 +197,39 @@ class ProductResponse(BaseModel):
 class ToggleFavoriteRequest(BaseModel):
     product_id: str
     action: Literal["like", "unlike"]
+
+class PaymentCreateResponse(BaseModel):
+    confirmation_url: str
+
+class PaymentStatusResponse(BaseModel):
+    status: str
+
+@app.get("/api/v1/payments/status", response_model=PaymentStatusResponse)
+async def get_payment_status(
+    payment_id: str,
+    db: Session = Depends(get_db)
+):
+    """Get the status of a payment by its ID and update it from YooKassa"""
+    order = db.query(Order).filter(Order.id == payment_id).first()
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Payment not found"
+        )
+
+    # Fetch real-time status from YooKassa
+    yookassa_status = payment_service.get_yookassa_payment_status(order.id)
+    if yookassa_status:
+        # Update local order status if different
+        if order.status.value.lower() != yookassa_status.lower():
+            print(f"Updating order {order.id} status from {order.status.value} to {yookassa_status} based on YooKassa.")
+            order.status = OrderStatus(yookassa_status.upper()) # Assuming YooKassa status matches OrderStatus enum
+            db.commit()
+            db.refresh(order)
+    else:
+        print(f"Could not fetch real-time status for order {order.id} from YooKassa.")
+
+    return PaymentStatusResponse(status=order.status.value)
 
 # Dependency to get current user
 def get_current_user(
@@ -1185,6 +1221,114 @@ async def health_check():
         ]
     }
 
+@app.post("/api/v1/payments/create", response_model=PaymentCreateResponse)
+async def create_payment_endpoint(
+    payment_data: schemas.PaymentCreate,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    print("Entered create_payment_endpoint")
+    print(f"Request headers: {request.headers}")
+    try:
+        raw_request_body = await request.body()
+        print(f"Raw incoming request body for /api/v1/payments/create: {raw_request_body.decode()}")
+
+        # This line is where Pydantic validation happens implicitly
+        # payment_data = schemas.PaymentCreate.parse_raw(raw_request_body) # This is handled by FastAPI automatically
+
+        confirmation_url = payment_service.create_payment(
+            db=db,
+            user_id=current_user.id,
+            amount=float(payment_data.amount.value),
+            currency=payment_data.amount.currency,
+            description=payment_data.description,
+            return_url=payment_data.returnUrl,
+            items=payment_data.items
+        )
+        #print(f"Receipt data sent to payment_service: {payment_data.receipt.dict() if payment_data.receipt else None}")
+        return PaymentCreateResponse(confirmation_url=confirmation_url)
+    except ValidationError as e:
+        print(f"Pydantic Validation Error: {e.errors()}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=e.errors()
+        )
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@app.get("/api/v1/orders", response_model=List[schemas.OrderResponse])
+async def get_orders(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all orders for the current user"""
+    orders = db.query(Order).filter(Order.user_id == current_user.id).all()
+    
+    response = []
+    for order in orders:
+        order_items = []
+        for item in order.items:
+            product = db.query(Product).filter(Product.id == item.product_id).first()
+            if product:
+                order_items.append(schemas.OrderItemResponse(
+                    id=product.id,
+                    name=product.name,
+                    price=item.price,
+                    size=item.size,
+                    image=product.image_url,
+                    delivery=schemas.Delivery(
+                        cost="350 р",
+                        estimatedTime="1-3 дня",
+                        tracking_number=None
+                    )
+                ))
+
+        response.append(schemas.OrderResponse(
+            id=order.id,
+            number=order.order_number,
+            total=f"{order.total_amount} {order.currency}",
+            date=order.created_at,
+            status=order.status.value,
+            items=order_items
+        ))
+    return response
+
+
+@app.post("/api/v1/payments/webhook")
+async def payment_webhook(request: Request, db: Session = Depends(get_db)):
+    """Handle YooKassa payment webhooks"""
+    if not payment_service.verify_webhook_ip(request.client.host):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid IP address"
+        )
+
+    request_body = await request.body()
+    payload = json.loads(request_body)
+    print(f"Webhook payload received: {payload}")
+    event = payload.get("event")
+    print(f"Webhook event: {event}")
+    if event == "payment.succeeded":
+        payment = payload.get("object", {})
+        order_id = payment.get("metadata", {}).get("order_id")
+        print(f"Payment succeeded - Order ID: {order_id}")
+        if order_id:
+            payment_service.update_order_status(db, order_id, OrderStatus.PAID)
+    elif event == "payment.canceled":
+        payment = payload.get("object", {})
+        order_id = payment.get("metadata", {}).get("order_id")
+        print(f"Payment canceled - Order ID: {order_id}")
+        if order_id:
+            payment_service.update_order_status(db, order_id, OrderStatus.CANCELED)
+    db.commit() # Added commit here
+    return {"status": "ok"}
+
+
 # Initialize database on startup
 @app.on_event("startup")
 async def startup_event():
@@ -1193,4 +1337,4 @@ async def startup_event():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8000)

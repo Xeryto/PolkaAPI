@@ -65,5 +65,10 @@ class Settings:
     # Development
     DEBUG: bool = os.getenv("DEBUG", "True").lower() == "true"
 
+    # YooKassa
+    YOOKASSA_SHOP_ID: Optional[str] = os.getenv("YOOKASSA_SHOP_ID")
+    YOOKASSA_SECRET_KEY: Optional[str] = os.getenv("YOOKASSA_SECRET_KEY")
+    # YOOKASSA_WEBHOOK_URL: Optional[str] = os.getenv("YOOKASSA_WEBHOOK_URL")
+
 # Create settings instance
 settings = Settings() 

@@ -8,8 +8,6 @@ from starlette.config import Config
 from config import settings
 import httpx
 import jwt
-from datetime import datetime, timedelta
-import json
 
 class OAuthService:
     """OAuth service for handling social login"""

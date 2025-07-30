@@ -11,4 +11,7 @@ authlib==1.2.1
 httpx==0.25.2
 python-dotenv==1.0.0
 bcrypt==4.1.2
-PyJWT==2.8.0 
+PyJWT==2.8.0
+yookassa==2.1.0
+uuid==1.30
+urllib3==1.26.15
