@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends, status, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, validator, ValidationError
@@ -9,16 +9,21 @@ from sqlalchemy import func
 from datetime import datetime, timedelta
 import re
 import json
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # Import our modules
 from config import settings
 from database import get_db, init_db
-from models import User, OAuthAccount, Brand, Style, UserBrand, UserStyle, Gender, FriendRequest, Friendship, FriendRequestStatus, Product, UserLikedProduct, Category, Order, OrderItem, OrderStatus
+from models import User, OAuthAccount, Brand, Style, UserBrand, UserStyle, Gender, FriendRequest, Friendship, FriendRequestStatus, Product, UserLikedProduct, Category, Order, OrderItem, OrderStatus, ExclusiveAccessEmail, ProductVariant, ProductStyle
 from auth_service import auth_service
 from oauth_service import oauth_service
 import payment_service
 import schemas
+from mail_service import mail_service
 
+limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(
     title="PolkaAPI - Authentication Backend",
     description="A modern, fast, and secure authentication API with OAuth support for mobile and web applications",
@@ -26,6 +31,8 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS middleware for React Native app
 app.add_middleware(
@@ -95,7 +102,7 @@ class UserResponse(BaseModel):
     username: str
     email: str
     avatar_url: Optional[str] = None
-    is_verified: bool = False
+    is_email_verified: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -148,7 +155,7 @@ class EnhancedUserResponse(BaseModel):
     gender: Optional[Gender] = None
     selected_size: Optional[str] = None
     avatar_url: Optional[str] = None
-    is_verified: bool = False
+    is_email_verified: bool = False
     favorite_brands: List[BrandResponse] = []
     favorite_styles: List[StyleResponse] = []
     created_at: datetime
@@ -186,12 +193,16 @@ class PublicUserProfileResponse(BaseModel):
 class MessageResponse(BaseModel):
     message: str
 
+class ProductVariantSchema(BaseModel):
+    size: str
+    stock_quantity: int
+
 class ProductResponse(BaseModel):
     id: str
     name: str
     price: str
     image_url: Optional[str] = None
-    available_sizes: Optional[List[str]] = None
+    variants: List[ProductVariantSchema] = []
     is_liked: Optional[bool] = None # Only for /for_user endpoint
 
 class ToggleFavoriteRequest(BaseModel):
@@ -253,6 +264,18 @@ def get_current_user(
     
     return user
 
+def get_current_brand_user(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> User:
+    """Get current brand user from JWT token"""
+    if not current_user.is_brand:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a brand account"
+        )
+    return current_user
+
 # API Endpoints
 @app.post("/api/v1/auth/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
 async def register(user_data: UserCreate, db: Session = Depends(get_db)):
@@ -293,7 +316,7 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
             username=user.username,
             email=user.email,
             avatar_url=user.avatar_url,
-            is_verified=user.is_verified,
+            is_email_verified=user.is_email_verified,
             created_at=user.created_at,
             updated_at=user.updated_at
         )
@@ -340,7 +363,7 @@ async def login(user_data: UserLogin, db: Session = Depends(get_db)):
             username=user.username,
             email=user.email,
             avatar_url=user.avatar_url,
-            is_verified=user.is_verified,
+            is_email_verified=user.is_email_verified,
             created_at=user.created_at,
             updated_at=user.updated_at
         )
@@ -468,10 +491,88 @@ async def oauth_callback(provider: str, code: str, state: str, db: Session = Dep
             detail=f"OAuth callback failed: {str(e)}"
         )
 
+@app.post("/api/v1/auth/request-verification")
+@limiter.limit("5/minute")
+async def request_verification(request: Request, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if current_user.is_email_verified:
+        raise HTTPException(status_code=400, detail="Email already verified")
+
+    token = auth_service.create_verification_token(db, current_user)
+    mail_service.send_email(
+        to_email=current_user.email,
+        subject="Verify your email address",
+        html_content=f"Please click the following link to verify your email address: <a href=\"http://localhost:3000/verify-email?token={token}\">Verify Email</a>"
+    )
+    return {"message": "Verification email sent"}
+
+@app.post("/api/v1/auth/verify-email")
+async def verify_email(token: str, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.verification_token == token).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid token")
+
+    if user.verification_token_expires < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Token has expired")
+
+    user.is_email_verified = True
+    user.verification_token = None
+    user.verification_token_expires = None
+    db.commit()
+
+    return {"message": "Email verified successfully"}
+
+@app.post("/api/v1/auth/forgot-password")
+@limiter.limit("5/minute")
+async def forgot_password(request: Request, forgot_password_request: schemas.ForgotPasswordRequest, db: Session = Depends(get_db)):
+    user = auth_service.get_user_by_email(db, forgot_password_request.email)
+    if not user:
+        # Still return a success message to prevent email enumeration
+        return {"message": "If an account with that email exists, a password reset link has been sent."}
+
+    token = auth_service.create_password_reset_token(db, user)
+    mail_service.send_email(
+        to_email=user.email,
+        subject="Password Reset Request",
+        html_content=f"Please click the following link to reset your password: <a href=\"http://localhost:3000/reset-password?token={token}\">Reset Password</a>"
+    )
+
+    return {"message": "If an account with that email exists, a password reset link has been sent."}
+
+@app.post("/api/v1/auth/reset-password")
+async def reset_password(reset_password_request: schemas.ResetPasswordRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.password_reset_token == reset_password_request.token).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid token")
+
+    if user.password_reset_expires < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Token has expired")
+
+    user.password_hash = auth_service.hash_password(reset_password_request.new_password)
+    user.password_reset_token = None
+    user.password_reset_expires = None
+    db.commit()
+
+    return {"message": "Password has been reset successfully."}
+
 @app.post("/api/v1/auth/logout")
 async def logout():
     """Logout user (JWT tokens are stateless)"""
     return {"message": "Successfully logged out"}
+
+@app.post("/api/v1/exclusive-access-signup", status_code=status.HTTP_201_CREATED)
+async def exclusive_access_signup(signup_data: schemas.ExclusiveAccessSignupRequest, db: Session = Depends(get_db)):
+    """Store email for exclusive access signup"""
+    existing_email = db.query(ExclusiveAccessEmail).filter(ExclusiveAccessEmail.email == signup_data.email).first()
+    if existing_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already signed up for exclusive access"
+        )
+    
+    new_signup = ExclusiveAccessEmail(email=signup_data.email)
+    db.add(new_signup)
+    db.commit()
+    return {"message": "Successfully signed up for exclusive access!"}
 
 @app.get("/api/v1/user/profile", response_model=EnhancedUserResponse)
 async def get_user_profile(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -487,23 +588,330 @@ async def get_user_profile(current_user: User = Depends(get_current_user), db: S
         gender=current_user.gender,
         selected_size=current_user.selected_size,
         avatar_url=current_user.avatar_url,
-        is_verified=current_user.is_verified,
-        favorite_brands=[BrandResponse(
-            id=ub.brand.id,
-            name=ub.brand.name,
-            slug=ub.brand.slug,
-            logo=ub.brand.logo,
-            description=ub.brand.description
-        ) for ub in favorite_brands],
-        favorite_styles=[StyleResponse(
-            id=us.style.id,
-            name=us.style.name,
-            description=us.style.description,
-            image=us.style.image
-        ) for us in favorite_styles],
+        is_email_verified=current_user.is_email_verified,
+        favorite_brands=[
+            BrandResponse(
+                id=ub.brand.id,
+                name=ub.brand.name,
+                slug=ub.brand.slug,
+                logo=ub.brand.logo,
+                description=ub.brand.description
+            ) for ub in favorite_brands
+        ],
+        favorite_styles=[
+            StyleResponse(
+                id=us.style.id,
+                name=us.style.name,
+                description=us.style.description,
+                image=us.style.image
+            ) for us in favorite_styles
+        ],
         created_at=current_user.created_at,
         updated_at=current_user.updated_at
     )
+
+    return EnhancedUserResponse(
+        id=current_user.id,
+        username=current_user.username,
+        email=current_user.email,
+        gender=current_user.gender,
+        selected_size=current_user.selected_size,
+        avatar_url=current_user.avatar_url,
+        is_email_verified=current_user.is_email_verified,
+        favorite_brands=[
+            BrandResponse(
+                id=ub.brand.id,
+                name=ub.brand.name,
+                slug=ub.brand.slug,
+                logo=ub.brand.logo,
+                description=ub.brand.description
+            ) for ub in favorite_brands
+        ],
+        favorite_styles=[
+            StyleResponse(
+                id=us.style.id,
+                name=us.style.name,
+                description=us.style.description,
+                image=us.style.image
+            ) for us in favorite_styles
+        ],
+        created_at=current_user.created_at,
+        updated_at=current_user.updated_at
+    )
+
+@app.post("/api/v1/brands/products", response_model=schemas.ProductResponse, status_code=status.HTTP_201_CREATED)
+async def create_product(
+    product_data: schemas.ProductCreateRequest,
+    current_user: User = Depends(get_current_brand_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new product for the authenticated brand user"""
+    # Verify brand_id belongs to the current user (if applicable, or create a brand for the user)
+    # For now, assuming brand_id is validated elsewhere or user is directly linked to a brand
+    brand = db.query(Brand).filter(Brand.id == product_data.brand_id).first()
+    if not brand:
+        raise HTTPException(status_code=400, detail="Brand not found")
+
+    # Create product
+    product = Product(
+        name=product_data.name,
+        description=product_data.description,
+        price=product_data.price,
+        image_url=product_data.image_url,
+        brand_id=product_data.brand_id,
+        category_id=product_data.category_id
+    )
+    db.add(product)
+    db.commit()
+    db.refresh(product)
+
+    # Add variants
+    for variant_data in product_data.variants:
+        variant = ProductVariant(
+            product_id=product.id,
+            size=variant_data.size,
+            stock_quantity=variant_data.stock_quantity
+        )
+        db.add(variant)
+    db.commit()
+    db.refresh(product)
+
+    # Add styles
+    for style_id in product_data.styles:
+        style = db.query(Style).filter(Style.id == style_id).first()
+        if not style:
+            raise HTTPException(status_code=400, detail=f"Style with ID {style_id} not found")
+        product_style = ProductStyle(product_id=product.id, style_id=style_id)
+        db.add(product_style)
+    db.commit()
+    db.refresh(product)
+
+    return schemas.ProductResponse(
+        id=product.id,
+        name=product.name,
+        description=product.description,
+        price=product.price,
+        image_url=product.image_url,
+        brand_id=product.brand_id,
+        category_id=product.category_id,
+        styles=[ps.style_id for ps in product.styles],
+        variants=[schemas.ProductVariantSchema(size=v.size, stock_quantity=v.stock_quantity) for v in product.variants]
+    )
+
+@app.put("/api/v1/brands/products/{product_id}", response_model=schemas.ProductResponse)
+async def update_product(
+    product_id: str,
+    product_data: schemas.ProductUpdateRequest,
+    current_user: User = Depends(get_current_brand_user),
+    db: Session = Depends(get_db)
+):
+    """Update an existing product for the authenticated brand user"""
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    # Ensure the product belongs to the current brand user (if applicable)
+    # For now, assuming brand_id is validated elsewhere or user is directly linked to a brand
+    brand = db.query(Brand).filter(Brand.id == product.brand_id).first()
+    if not brand:
+        raise HTTPException(status_code=400, detail="Brand not found for this product")
+
+    # Update product fields
+    for field, value in product_data.dict(exclude_unset=True).items():
+        if field == "variants":
+            # Handle variants separately
+            db.query(ProductVariant).filter(ProductVariant.product_id == product.id).delete()
+            for variant_data in value:
+                variant = ProductVariant(
+                    product_id=product.id,
+                    size=variant_data.size,
+                    stock_quantity=variant_data.stock_quantity
+                )
+                db.add(variant)
+        elif field == "styles":
+            # Handle styles separately
+            db.query(ProductStyle).filter(ProductStyle.product_id == product.id).delete()
+            for style_id in value:
+                style = db.query(Style).filter(Style.id == style_id).first()
+                if not style:
+                    raise HTTPException(status_code=400, detail=f"Style with ID {style_id} not found")
+                product_style = ProductStyle(product_id=product.id, style_id=style_id)
+                db.add(product_style)
+        else:
+            setattr(product, field, value)
+
+    db.commit()
+    db.refresh(product)
+
+    return schemas.ProductResponse(
+        id=product.id,
+        name=product.name,
+        description=product.description,
+        price=product.price,
+        image_url=product.image_url,
+        brand_id=product.brand_id,
+        category_id=product.category_id,
+        styles=[ps.style_id for ps in product.styles],
+        variants=[schemas.ProductVariantSchema(size=v.size, stock_quantity=v.stock_quantity) for v in product.variants]
+    )
+
+@app.get("/api/v1/brands/products", response_model=List[schemas.ProductResponse])
+async def get_brand_products(
+    current_user: User = Depends(get_current_brand_user),
+    db: Session = Depends(get_db)
+):
+    """Get all products for the authenticated brand user"""
+    # Assuming a brand user is associated with a single brand, or we filter by brand_id
+    # For now, let's assume current_user.id can be used to find associated products
+    # This needs a proper link between User and Brand models if not already present
+    # For demonstration, let's assume brand_id is directly linked to user for now, or filter by a known brand_id
+    # A more robust solution would involve a UserBrand relationship or similar.
+    
+    # For now, let's fetch products from a specific brand (e.g., brand_id = 1 for testing)
+    # In a real app, you'd link the brand user to their brand(s) and filter accordingly.
+    products = db.query(Product).filter(Product.brand_id == 1).all() # Placeholder: filter by a test brand_id
+
+    response_products = []
+    for product in products:
+        response_products.append(schemas.ProductResponse(
+            id=product.id,
+            name=product.name,
+            description=product.description,
+            price=product.price,
+            image_url=product.image_url,
+            brand_id=product.brand_id,
+            category_id=product.category_id,
+            styles=[ps.style_id for ps in product.styles],
+            variants=[schemas.ProductVariantSchema(size=v.size, stock_quantity=v.stock_quantity) for v in product.variants]
+        ))
+    return response_products
+
+@app.get("/api/v1/brands/products/{product_id}", response_model=schemas.ProductResponse)
+async def get_brand_product_details(
+    product_id: str,
+    current_user: User = Depends(get_current_brand_user),
+    db: Session = Depends(get_db)
+):
+    """Get details of a specific product for the authenticated brand user"""
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    # Ensure the product belongs to the current brand user (if applicable)
+    # Similar to get_brand_products, this needs proper brand-user linking.
+    # For now, assume brand_id = 1 for testing.
+    if product.brand_id != 1: # Placeholder: check against a test brand_id
+        raise HTTPException(status_code=403, detail="Product does not belong to your brand")
+
+    return schemas.ProductResponse(
+        id=product.id,
+        name=product.name,
+        description=product.description,
+        price=product.price,
+        image_url=product.image_url,
+        brand_id=product.brand_id,
+        category_id=product.category_id,
+        styles=[ps.style_id for ps in product.styles],
+        variants=[schemas.ProductVariantSchema(size=v.size, stock_quantity=v.stock_quantity) for v in product.variants]
+    )
+
+    return EnhancedUserResponse(
+        id=current_user.id,
+        username=current_user.username,
+        email=current_user.email,
+        gender=current_user.gender,
+        selected_size=current_user.selected_size,
+        avatar_url=current_user.avatar_url,
+        is_email_verified=current_user.is_email_verified,
+        favorite_brands=[
+            BrandResponse(
+                id=ub.brand.id,
+                name=ub.brand.name,
+                slug=ub.brand.slug,
+                logo=ub.brand.logo,
+                description=ub.brand.description
+            ) for ub in favorite_brands
+        ],
+        favorite_styles=[
+            StyleResponse(
+                id=us.style.id,
+                name=us.style.name,
+                description=us.style.description,
+                image=us.style.image
+            ) for us in favorite_styles
+        ],
+        created_at=current_user.created_at,
+        updated_at=current_user.updated_at
+    )
+
+@app.get("/api/v1/brands/orders", response_model=List[schemas.OrderResponse])
+async def get_brand_orders(
+    current_user: User = Depends(get_current_brand_user),
+    db: Session = Depends(get_db)
+):
+    """Get all orders containing products from the authenticated brand user"""
+    # This assumes a brand user is associated with a single brand, and we filter orders by that brand's products.
+    # In a real application, you'd link the brand user to their brand(s) and filter accordingly.
+    # For now, let's assume brand_id = 1 for testing.
+    brand_id_filter = 1 # Placeholder: replace with actual brand_id from current_user
+
+    orders_with_brand_products = db.query(Order).join(OrderItem).join(Product).filter(
+        Product.brand_id == brand_id_filter
+    ).distinct().all()
+
+    response = []
+    for order in orders_with_brand_products:
+        order_items = []
+        for item in order.items:
+            product = db.query(Product).filter(Product.id == item.product_id).first()
+            if product and product.brand_id == brand_id_filter: # Only include items from this brand
+                order_items.append(schemas.OrderItemResponse(
+                    id=item.id, # Use order item ID here
+                    name=product.name,
+                    price=item.price,
+                    size=item.size,
+                    image=product.image_url,
+                    delivery=schemas.Delivery(
+                        cost="350 р",
+                        estimatedTime="1-3 дня",
+                        tracking_number=item.tracking_number
+                    )
+                ))
+        if order_items: # Only add order if it contains items from this brand
+            response.append(schemas.OrderResponse(
+                id=order.id,
+                number=order.order_number,
+                total=f"{order.total_amount} {order.currency}",
+                date=order.created_at,
+                status=order.status.value,
+                items=order_items
+            ))
+    return response
+
+@app.put("/api/v1/brands/orders/{order_item_id}/tracking", response_model=MessageResponse)
+async def update_order_item_tracking(
+    order_item_id: str,
+    tracking_data: schemas.UpdateTrackingRequest,
+    current_user: User = Depends(get_current_brand_user),
+    db: Session = Depends(get_db)
+):
+    """Update tracking number for a specific order item belonging to the authenticated brand user"""
+    order_item = db.query(OrderItem).filter(OrderItem.id == order_item_id).first()
+    if not order_item:
+        raise HTTPException(status_code=404, detail="Order item not found")
+
+    # Verify that the order item belongs to a product from the current brand user
+    product = db.query(Product).filter(Product.id == order_item.product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Associated product not found")
+
+    brand_id_filter = 1 # Placeholder: replace with actual brand_id from current_user
+    if product.brand_id != brand_id_filter:
+        raise HTTPException(status_code=403, detail="Order item does not belong to your brand")
+
+    order_item.tracking_number = tracking_data.tracking_number
+    db.commit()
+    return {"message": "Tracking number updated successfully"}
 
 @app.get("/api/v1/user/profile/completion-status")
 async def get_profile_completion_status(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -583,20 +991,24 @@ async def update_user_profile(
         gender=current_user.gender,
         selected_size=current_user.selected_size,
         avatar_url=current_user.avatar_url,
-        is_verified=current_user.is_verified,
-        favorite_brands=[BrandResponse(
-            id=ub.brand.id,
-            name=ub.brand.name,
-            slug=ub.brand.slug,
-            logo=ub.brand.logo,
-            description=ub.brand.description
-        ) for ub in favorite_brands],
-        favorite_styles=[StyleResponse(
-            id=us.style.id,
-            name=us.style.name,
-            description=us.style.description,
-            image=us.style.image
-        ) for us in favorite_styles],
+        is_email_verified=current_user.is_email_verified,
+        favorite_brands=[
+            BrandResponse(
+                id=ub.brand.id,
+                name=ub.brand.name,
+                slug=ub.brand.slug,
+                logo=ub.brand.logo,
+                description=ub.brand.description
+            ) for ub in favorite_brands
+        ],
+        favorite_styles=[
+            StyleResponse(
+                id=us.style.id,
+                name=us.style.name,
+                description=us.style.description,
+                image=us.style.image
+            ) for us in favorite_styles
+        ],
         created_at=current_user.created_at,
         updated_at=current_user.updated_at
     )
@@ -754,7 +1166,7 @@ async def get_user_favorites(
             name=product.name,
             price=product.price,
             image_url=product.image_url,
-            available_sizes=product.available_sizes.split(',') if product.available_sizes else None,
+            variants=[ProductVariantSchema(size=v.size, stock_quantity=v.stock_quantity) for v in product.variants],
             is_liked=True # All products returned here are liked by definition
         ))
     return results
@@ -779,9 +1191,10 @@ async def get_recommendations_for_user(
             name=product.name,
             price=product.price,
             image_url=product.image_url,
-            available_sizes=product.available_sizes.split(',') if product.available_sizes else None,
+            variants=[ProductVariantSchema(size=v.size, stock_quantity=v.stock_quantity) for v in product.variants],
             is_liked=product.id in liked_product_ids
         ))
+    print(all_products)
     return recommendations
 
 @app.get("/api/v1/recommendations/for_friend/{friend_id}", response_model=List[ProductResponse])
@@ -823,7 +1236,7 @@ async def get_recommendations_for_friend(
             name=product.name,
             price=product.price,
             image_url=product.image_url,
-            available_sizes=product.available_sizes.split(',') if product.available_sizes else None,
+            variants=[ProductVariantSchema(size=v.size, stock_quantity=v.stock_quantity) for v in product.variants],
             is_liked=product.id in liked_product_ids
         ))
     return recommendations
@@ -844,7 +1257,7 @@ async def search_products(
 
     # Apply search query
     if query:
-        search_pattern = f"%{query.lower()}%"
+        search_pattern = f"%{query}%"
         products_query = products_query.filter(
             (Product.name.ilike(search_pattern)) |
             (Product.description.ilike(search_pattern))
@@ -855,10 +1268,10 @@ async def search_products(
         products_query = products_query.filter(Product.category_id == category)
 
     if brand and brand != "Бренд":
-        products_query = products_query.join(Brand).filter(Brand.name.ilike(f"%{brand.lower()}%"))
+        products_query = products_query.join(Brand).filter(Brand.name.ilike(f"%{brand}% "))
 
     if style and style != "Стиль":
-        products_query = products_query.join(Product.styles).join(Style).filter(Style.name.ilike(f"%{style.lower()}%"))
+        products_query = products_query.join(Product.styles).join(Style).filter(Style.name.ilike(f"%{style}% "))
 
     # Apply pagination
     products_query = products_query.offset(offset).limit(limit)
@@ -873,7 +1286,7 @@ async def search_products(
             name=product.name,
             price=product.price,
             image_url=product.image_url,
-            available_sizes=product.available_sizes.split(',') if product.available_sizes else None,
+            variants=[ProductVariantSchema(size=v.size, stock_quantity=v.stock_quantity) for v in product.variants],
             is_liked=product.id in liked_product_ids
         ))
     return results

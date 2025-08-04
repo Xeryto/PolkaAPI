@@ -29,7 +29,7 @@ class PaymentCreate(BaseModel):
 
     @validator('returnUrl')
     def validate_return_url(cls, v):
-        if "://" not in v:
+        if ":://" not in v:
             raise ValueError('returnUrl must be a valid URL containing ://')
         return v
 
@@ -45,9 +45,13 @@ class OrderItemResponse(BaseModel):
     size: str
     image: str
     delivery: Delivery
+    tracking_number: Optional[str] = None # NEW: Tracking number
 
     class Config:
         orm_mode = True
+
+class UpdateTrackingRequest(BaseModel):
+    tracking_number: str
 
 class OrderResponse(BaseModel):
     id: str
@@ -56,6 +60,54 @@ class OrderResponse(BaseModel):
     date: datetime
     status: str
     items: List[OrderItemResponse]
+
+    class Config:
+        orm_mode = True
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+class ExclusiveAccessSignupRequest(BaseModel):
+    email: EmailStr
+
+class ProductVariantSchema(BaseModel):
+    size: str
+    stock_quantity: int
+
+class ProductCreateRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+    price: str
+    image_url: Optional[str] = None
+    brand_id: int
+    category_id: str
+    styles: Optional[List[str]] = []
+    variants: List[ProductVariantSchema]
+
+class ProductUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    price: Optional[str] = None
+    image_url: Optional[str] = None
+    brand_id: Optional[int] = None
+    category_id: Optional[str] = None
+    styles: Optional[List[str]] = None
+    variants: Optional[List[ProductVariantSchema]] = None
+
+class ProductResponse(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    price: str
+    image_url: Optional[str] = None
+    brand_id: int
+    category_id: str
+    styles: List[str] = []
+    variants: List[ProductVariantSchema] = []
 
     class Config:
         orm_mode = True

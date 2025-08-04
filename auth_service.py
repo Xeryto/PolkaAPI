@@ -10,6 +10,7 @@ import bcrypt
 import jwt
 from datetime import datetime, timedelta
 import uuid
+import secrets
 
 class AuthService:
     """Authentication service for user operations"""
@@ -53,7 +54,7 @@ class AuthService:
         email: str,
         password_hash: Optional[str] = None,
         avatar_url: Optional[str] = None,
-        is_verified: bool = False
+        is_email_verified: bool = False # Changed to is_email_verified
     ) -> User:
         """Create a new user"""
         user = User(
@@ -62,7 +63,7 @@ class AuthService:
             email=email,
             password_hash=password_hash,
             avatar_url=avatar_url,
-            is_verified=is_verified
+            is_email_verified=is_email_verified # Changed to is_email_verified
         )
         db.add(user)
         db.commit()
@@ -182,7 +183,7 @@ class AuthService:
                     username=username,
                     email=user_info['email'],
                     avatar_url=user_info['avatar_url'],
-                    is_verified=user_info['is_verified']
+                    is_email_verified=user_info.get('is_email_verified', False) # Use is_email_verified
                 )
                 
                 AuthService.create_oauth_account(
@@ -203,7 +204,7 @@ class AuthService:
                 "username": user.username,
                 "email": user.email,
                 "avatar_url": user.avatar_url,
-                "is_verified": user.is_verified,
+                "is_email_verified": user.is_email_verified, # Use is_email_verified
                 "created_at": user.created_at,
                 "updated_at": user.updated_at
             }
@@ -227,5 +228,26 @@ class AuthService:
         
         return username
 
+    @staticmethod
+    def _generate_secure_token(length=32):
+        """Generate a cryptographically secure random token."""
+        return secrets.token_urlsafe(length)
+
+    def create_verification_token(self, db: Session, user: User):
+        """Generate and store a verification token for the user."""
+        token = self._generate_secure_token()
+        user.verification_token = token
+        user.verification_token_expires = datetime.utcnow() + timedelta(minutes=30)
+        db.commit()
+        return token
+
+    def create_password_reset_token(self, db: Session, user: User):
+        """Generate and store a password reset token for the user."""
+        token = self._generate_secure_token()
+        user.password_reset_token = token
+        user.password_reset_expires = datetime.utcnow() + timedelta(minutes=15)
+        db.commit()
+        return token
+
 # Create auth service instance
-auth_service = AuthService() 
+auth_service = AuthService()

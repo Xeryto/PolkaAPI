@@ -18,7 +18,7 @@ class Settings:
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
     
     # Database
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/polkaDB")
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://polkagress_user:2SANlJyrpZMLzEbjeqfjszjxOmCzgcFm@dpg-d26oajndiees73aohlpg-a.oregon-postgres.render.com/polkagress")
     
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = [
@@ -68,7 +68,12 @@ class Settings:
     # YooKassa
     YOOKASSA_SHOP_ID: Optional[str] = os.getenv("YOOKASSA_SHOP_ID")
     YOOKASSA_SECRET_KEY: Optional[str] = os.getenv("YOOKASSA_SECRET_KEY")
-    # YOOKASSA_WEBHOOK_URL: Optional[str] = os.getenv("YOOKASSA_WEBHOOK_URL")
+
+    # UniSender
+    UNISENDER_API_KEY: Optional[str] = os.getenv("UNISENDER_API_KEY")
+    UNISENDER_FROM_EMAIL: Optional[str] = os.getenv("UNISENDER_FROM_EMAIL")
+    UNISENDER_FROM_NAME: Optional[str] = os.getenv("UNISENDER_FROM_NAME")
+    UNISENDER_LIST_ID: Optional[str] = os.getenv("UNISENDER_LIST_ID")
 
 # Create settings instance
 settings = Settings() 

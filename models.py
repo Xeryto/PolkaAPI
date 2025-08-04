@@ -1,7 +1,7 @@
 """
 Database models for PolkaAPI
 """
-from sqlalchemy import Column, String, Boolean, DateTime, Text, ForeignKey, Integer, Enum as SQLEnum
+from sqlalchemy import Column, String, Boolean, DateTime, Text, ForeignKey, Integer, Enum as SQLEnum, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 import uuid
@@ -33,7 +33,12 @@ class User(Base):
     selected_size = Column(String(10), nullable=True)  # NEW: User's preferred size
     avatar_url = Column(String(500), nullable=True)
     is_active = Column(Boolean, default=True)
-    is_verified = Column(Boolean, default=False)
+    is_email_verified = Column(Boolean, default=False)
+    is_brand = Column(Boolean, default=False) # NEW: Field to identify brand accounts
+    verification_token = Column(String, nullable=True)
+    verification_token_expires = Column(DateTime, nullable=True)
+    password_reset_token = Column(String, nullable=True)
+    password_reset_expires = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -166,7 +171,6 @@ class Product(Base):
     description = Column(String(1000), nullable=True)
     price = Column(String(50), nullable=False) # Storing as string to include currency symbol
     image_url = Column(String(500), nullable=True)
-    available_sizes = Column(String(255), nullable=True) # e.g., "XS,S,M,L,XL"
     brand_id = Column(Integer, ForeignKey("brands.id"), nullable=False)
     category_id = Column(String(50), ForeignKey("categories.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -175,6 +179,25 @@ class Product(Base):
     brand = relationship("Brand")
     category = relationship("Category")
     styles = relationship("ProductStyle", back_populates="product", cascade="all, delete-orphan")
+    variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
+
+class ProductVariant(Base):
+    """Product variant model for sizes and inventory"""
+    __tablename__ = "product_variants"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    product_id = Column(String, ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    size = Column(String(10), nullable=False)
+    stock_quantity = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    product = relationship("Product", back_populates="variants")
+
+    __table_args__ = (
+        UniqueConstraint('product_id', 'size', name='uq_product_size'),
+    )
 
 class UserLikedProduct(Base):
     """User-Product many-to-many relationship for liked items"""
@@ -269,6 +292,7 @@ class OrderItem(Base):
     quantity = Column(Integer, nullable=False)
     price = Column(String(50), nullable=False)
     size = Column(String(10), nullable=True)
+    tracking_number = Column(String(255), nullable=True) # NEW: Tracking number for the item
 
     order = relationship("Order", back_populates="items")
     product = relationship("Product")
@@ -285,3 +309,10 @@ class Payment(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     order = relationship("Order", back_populates="payment") 
+
+class ExclusiveAccessEmail(Base):
+    __tablename__ = "exclusive_access_emails"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow) 
